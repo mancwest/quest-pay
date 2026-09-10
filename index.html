@@ -152,9 +152,9 @@ function uid(){ return 'x'+Math.random().toString(36).slice(2,9); }
 function fmtMoney(n){ return CURRENCY + (Math.round(n*100)/100).toFixed(2).replace(/\.00$/,''); }
 
 function defaultConfig(){
-  return { parentPin:null, bonusAmount:5, taskLibrary: DEFAULT_TASKS.slice(), children:[], _setupDone:false };
+  return { parentPin:null, bonusAmount:5, taskLibrary: DEFAULT_TASKS.slice(), children:[], _setupDone:false, roomTidyEnabled:true, roomTidyLabel:'Tidy your room' };
 }
-function defaultWeek(){ return { assigned:[] }; }
+function defaultWeek(){ return { assigned:[], roomTidy:false }; }
 function defaultProfile(){ return { xp:0, totalWeeksApproved:0, currentStreak:0, bestStreak:0, totalTasksDone:0, badges:[] }; }
 
 var HISTORY_LIMIT = 12;
@@ -199,7 +199,10 @@ function normalizeWeeks(){
         delete t.done;
       });
     }
+    if(wk && typeof wk.roomTidy !== 'boolean') wk.roomTidy = false;
   });
+  if(typeof state.config.roomTidyEnabled !== 'boolean') state.config.roomTidyEnabled = true;
+  if(typeof state.config.roomTidyLabel !== 'string' || !state.config.roomTidyLabel) state.config.roomTidyLabel = 'Tidy your room';
 }
 
 async function loadAll(){
@@ -294,6 +297,7 @@ var PARENT_STEPS = [
   ['⏳','As soon as your child ticks something off, it shows up here as awaiting approval — no need to wait for the whole week.'],
   ['✅','Approve a single quest, or use "Approve all pending" to clear everything at once.'],
   ['✕','Tap Decline if a tick doesn\'t look right — it removes that one completion and lets your child know to redo it.'],
+  ['🧹','A final "Tidy your room" check (no $ value) is required every week before you can close it out — turn this on/off in Settings.'],
   ['🏁','When you\'re ready to wrap up, tap "Close the week & finalize" — this pays out anything pending, adds the bonus if everything was finished, and starts a fresh week.'],
   ['🔄','Tap the refresh icon any time to pull in the latest ticks from your child\'s phone.'],
   ['📈','Progress shows streaks, badges and past weeks for each child.']
@@ -305,6 +309,7 @@ var KID_STEPS = [
   ['🔁','Some quests need doing more than once — the number shows how many times.'],
   ['🤦','Tapped by mistake? Use "Oops, not done" to take it back.'],
   ['⏳','Once you\'ve ticked something off, it\'s waiting for a grown-up to approve it — you don\'t need to do anything else.'],
+  ['🧹','You\'ll also see a "Tidy your room" check — it\'s not worth $ but you always need to tick it off to get paid.'],
   ['🎁','Finish every quest to unlock the bonus chest.'],
   ['💰','Check "Earning potential" to see what you could earn, what\'s pending, and what\'s already approved.'],
   ['📊','The bar at the bottom of the screen shows your progress for the week.'],
@@ -616,6 +621,14 @@ function renderParentWeek(){
     statusCard.appendChild(list);
     statusCard.appendChild(el('<div style="display:flex; justify-content:space-between; align-items:center; margin-top:10px; padding-top:10px; border-top:3px solid var(--indigo);"><span style="font-weight:800; font-size:14px;">Total allocated this week</span><span style="font-weight:800; font-size:18px; color:var(--indigo-deep);">'+fmtMoney(money.potentialBase)+'</span></div>'));
 
+    if(state.config.roomTidyEnabled){
+      var roomRow = el('<button style="width:100%; display:flex; align-items:center; justify-content:space-between; margin-top:10px; padding:10px 12px; border-radius:10px; border:2px solid '+(week.roomTidy?'var(--meadow)':'var(--line)')+'; background:'+(week.roomTidy?'var(--card-deep)':'#fff')+';"></button>');
+      roomRow.innerHTML = '<span style="display:flex; align-items:center; gap:10px; font-weight:700;"><span style="font-size:18px;">🧹</span>'+escapeHtml(state.config.roomTidyLabel)+'</span><span style="font-weight:800; font-size:18px;">'+(week.roomTidy?'✅':'⬜')+'</span>';
+      roomRow.onclick = async function(){ week.roomTidy = !week.roomTidy; await saveWeeks(); render(); };
+      statusCard.appendChild(roomRow);
+      statusCard.appendChild(el('<p style="font-size:11px; color:var(--ink-soft); font-weight:700; margin-top:4px;">No $ value — just a final check required before the week can be paid out.</p>'));
+    }
+
     if(money.pendingAmount > 0){
       var approveAllBtn = el('<button class="btn btn-sun btn-block" style="margin-top:12px; font-size:14px;">✅ Approve all pending ('+fmtMoney(money.pendingAmount)+')</button>');
       approveAllBtn.onclick = async function(){
@@ -638,9 +651,14 @@ function renderParentWeek(){
     payCard.appendChild(rowLine('Potential total (incl. bonus)', fmtMoney(money.potentialTotal)));
     payCard.appendChild(el('<p style="font-size:12px; color:var(--ink-soft); font-weight:700; margin-top:6px;">Bonus of '+fmtMoney(state.config.bonusAmount)+' only counts if every quest reaches its full target.</p>'));
 
-    var closeBtn = el('<button class="btn btn-mint btn-block" style="margin-top:10px; font-size:15px;">🏁 Close the week & finalize</button>');
-    closeBtn.onclick = function(){ closeWeek(childId); };
-    payCard.appendChild(closeBtn);
+    var roomTidyBlocking = state.config.roomTidyEnabled && !week.roomTidy;
+    if(roomTidyBlocking){
+      payCard.appendChild(el('<p style="font-size:13px; font-weight:800; color:var(--maroon-deep); margin-top:10px;">🧹 Waiting for '+escapeHtml(child.name)+' to tidy their room before this week can be paid out.</p>'));
+    } else {
+      var closeBtn = el('<button class="btn btn-mint btn-block" style="margin-top:10px; font-size:15px;">🏁 Close the week & finalize</button>');
+      closeBtn.onclick = function(){ closeWeek(childId); };
+      payCard.appendChild(closeBtn);
+    }
     payCard.appendChild(el('<p style="font-size:11px; color:var(--ink-soft); font-weight:700; margin-top:6px;">Approves anything still pending, awards the bonus if everything\'s done, logs it to history, and starts a fresh week.</p>'));
     box.appendChild(payCard);
   }
@@ -762,6 +780,7 @@ function rowLine(label, value, strong){
 
 async function closeWeek(childId){
   var week = getWeek(childId);
+  if(state.config.roomTidyEnabled && !week.roomTidy) return;
   week.assigned.forEach(function(t){ t.approvedCount = t.count; });
   var money = weekMoney(childId);
   var profile = getProfile(childId);
@@ -846,6 +865,19 @@ function renderParentLibrary(){
   var bonusInput = el('<input type="number" min="0" step="0.5" value="'+state.config.bonusAmount+'" />');
   bonusInput.onchange = async function(){ var v = parseFloat(bonusInput.value); if(!isNaN(v) && v>=0){ state.config.bonusAmount = v; await saveConfig(); } };
   settingsCard.appendChild(bonusInput);
+
+  settingsCard.appendChild(el('<label style="margin-top:16px;">Final check before payout</label>'));
+  var roomTidyRow = el('<div style="display:flex; align-items:center; gap:10px; background:var(--card-deep); border-radius:10px; padding:10px 12px;"></div>');
+  var roomTidyToggle = el('<input type="checkbox" style="width:20px; height:20px;" />');
+  roomTidyToggle.checked = !!state.config.roomTidyEnabled;
+  roomTidyToggle.onchange = async function(){ state.config.roomTidyEnabled = roomTidyToggle.checked; await saveConfig(); };
+  roomTidyRow.appendChild(roomTidyToggle);
+  roomTidyRow.appendChild(el('<span style="font-weight:700; font-size:13px;">Require this every week before the week can be closed & paid out — no $ value, just a final checkbox.</span>'));
+  settingsCard.appendChild(roomTidyRow);
+  var roomTidyLabelInput = el('<input type="text" maxlength="30" style="margin-top:8px;" />');
+  roomTidyLabelInput.value = state.config.roomTidyLabel;
+  roomTidyLabelInput.onchange = async function(){ var v = roomTidyLabelInput.value.trim(); if(v){ state.config.roomTidyLabel = v; await saveConfig(); } };
+  settingsCard.appendChild(roomTidyLabelInput);
 
   settingsCard.appendChild(el('<label style="margin-top:16px;">Change grown-up PIN</label>'));
   var pinRow = el('<div style="display:flex; gap:8px;"></div>');
@@ -1198,6 +1230,13 @@ function renderKid(){
     trail.appendChild(stepWrap);
   });
   trailCard.appendChild(trail);
+
+  if(state.config.roomTidyEnabled){
+    var roomCard = el('<button style="width:100%; display:flex; align-items:center; justify-content:space-between; margin-top:4px; padding:14px; border-radius:14px; border:2px solid '+(week.roomTidy?'var(--meadow)':'var(--maroon-deep)')+'; background:'+(week.roomTidy?'var(--card-deep)':'#fff')+';"></button>');
+    roomCard.innerHTML = '<span style="display:flex; align-items:center; gap:10px;"><span style="font-size:24px;">🧹</span><span style="font-weight:800; text-align:left;">'+escapeHtml(state.config.roomTidyLabel)+'<div style="font-size:11px; font-weight:700; color:var(--ink-soft);">Always needed — no pocket money without it!</div></span></span><span style="font-size:24px;">'+(week.roomTidy?'✅':'⬜')+'</span>';
+    roomCard.onclick = async function(){ week.roomTidy = !week.roomTidy; await saveWeeks(); render(); };
+    trailCard.appendChild(roomCard);
+  }
 
   var chest = el('<div style="text-align:center; margin-top:6px;"></div>');
   chest.appendChild(el('<div style="font-size:40px;">'+(money.allDone?'🎁':'🔒')+'</div>'));
