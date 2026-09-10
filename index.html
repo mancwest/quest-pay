@@ -128,13 +128,15 @@ var DEFAULT_TASKS = [
 ];
 var EMOJI_CHOICES = ['🛏️','🐶','🧸','🍽️','🧺','🌱','📚','🗑️','🚿','🧦','🧹','🚲','🍳','🧽','🪟','⭐'];
 var LEVEL_STAGES = ['🥚','🐣','🐥','🦆','🦉','🦅','🦚','🐉'];
+var AVATAR_CHOICES = ['🧒','🦄','🐉','🦁','🐯','🐼','🦊','🐸','🦋','🐙','🦖','🧚','🧜','🐺','🦉','🐻','🐨','🦈','🐢','🤖','⚡','🌟'];
+var TITLE_CHOICES = ['','the Brave','the Swift','the Mighty','the Curious','the Legendary','the Clever','the Fearless','the Magnificent','the Wild','the Bright'];
 var CURRENCY = '$';
 
 var state = {
   config:null, weeks:null, profiles:null, history:null,
   screen:'loading', activeChildId:null,
   parentTab:'week', parentChildId:null, parentUnlocked:false,
-  setupChildren:[], editingTaskId:null, instructionsTab:'kid', cameFrom:'select', confirmingReset:false
+  setupChildren:[], editingTaskId:null, instructionsTab:'kid', cameFrom:'select', confirmingReset:false, showCustomize:false
 };
 
 var RAINBOW_BAR = '<div style="display:flex; gap:4px; justify-content:center; margin-top:6px;">'+
@@ -213,6 +215,10 @@ async function loadAll(){
   state.history = (await fbGet('qp-history')) || {};
 
   if(!state.config.children) state.config.children = [];
+  state.config.children.forEach(function(c){
+    if(!c.avatar) c.avatar = '🧒';
+    if(typeof c.title !== 'string') c.title = '';
+  });
   normalizeWeeks();
 
   if(state.config.children.length > 0) state.parentChildId = state.config.children[0].id;
@@ -232,6 +238,10 @@ async function refreshData(){
   if(pr) state.profiles = pr;
   if(hist) state.history = hist;
   if(!state.config.children) state.config.children = [];
+  state.config.children.forEach(function(c){
+    if(!c.avatar) c.avatar = '🧒';
+    if(typeof c.title !== 'string') c.title = '';
+  });
   normalizeWeeks();
   if(state.screen === 'parent' || state.screen === 'kid') render();
 }
@@ -298,6 +308,7 @@ var KID_STEPS = [
   ['🎁','Finish every quest to unlock the bonus chest.'],
   ['💰','Check "Earning potential" to see what you could earn, what\'s pending, and what\'s already approved.'],
   ['📊','The bar at the bottom of the screen shows your progress for the week.'],
+  ['🎨','Tap the 🎨 icon to pick your own avatar and a fun title, like "the Brave."'],
   ['🏅','Level up and collect badges the more weeks you finish!']
 ];
 
@@ -396,7 +407,7 @@ function renderSetup(){
     if(state.setupChildren.length===0){ err.textContent='Add at least one child.'; err.style.display='block'; return; }
     if(!/^[0-9]{4}$/.test(pin)){ err.textContent='PIN needs to be exactly 4 digits.'; err.style.display='block'; return; }
     if(isNaN(bonus) || bonus<0){ err.textContent='Bonus amount needs to be 0 or more.'; err.style.display='block'; return; }
-    state.config.children = state.setupChildren.map(function(n){ return {id:uid(), name:n}; });
+    state.config.children = state.setupChildren.map(function(n){ return {id:uid(), name:n, avatar:'🧒', title:''}; });
     state.config.parentPin = pin;
     state.config.bonusAmount = bonus;
     state.config._setupDone = true;
@@ -416,7 +427,7 @@ function renderSelect(){
   wrap.appendChild(banner);
 
   state.config.children.forEach(function(c){
-    var kidBtn = el('<button class="btn btn-mint btn-block" style="font-size:17px; padding:18px; margin-bottom:12px;">🧒 I\'m '+escapeHtml(c.name)+'</button>');
+    var kidBtn = el('<button class="btn btn-mint btn-block" style="font-size:17px; padding:18px; margin-bottom:12px;">'+(c.avatar||'🧒')+' I\'m '+escapeHtml(c.name)+'</button>');
     kidBtn.onclick = function(){ state.activeChildId = c.id; state.screen='kid'; render(); };
     wrap.appendChild(kidBtn);
   });
@@ -801,7 +812,7 @@ function renderParentLibrary(){
   childrenCard.appendChild(el('<h3 style="font-size:16px; margin-bottom:10px;">Children</h3>'));
   state.config.children.forEach(function(c){
     var row = el('<div style="display:flex; align-items:center; justify-content:space-between; padding:7px 0; border-top:2px solid var(--line);"></div>');
-    row.appendChild(el('<span style="font-weight:700;">🧒 '+escapeHtml(c.name)+'</span>'));
+    row.appendChild(el('<span style="font-weight:700;">'+(c.avatar||'🧒')+' '+escapeHtml(c.name)+(c.title?' <span style="font-weight:700; color:var(--ink-soft); font-size:12px;">'+c.title+'</span>':'')+'</span>'));
     var delBtn = el('<button style="background:none; border:none; font-size:16px; color:var(--maroon-deep);">🗑️</button>');
     delBtn.onclick = async function(){
       state.config.children = state.config.children.filter(function(x){return x.id!==c.id;});
@@ -820,7 +831,7 @@ function renderParentLibrary(){
   addChildBtn.onclick = async function(){
     var n = newChildInput.value.trim();
     if(!n) return;
-    state.config.children.push({id:uid(), name:n});
+    state.config.children.push({id:uid(), name:n, avatar:'🧒', title:''});
     newChildInput.value='';
     await saveConfig();
     render();
@@ -1079,8 +1090,11 @@ function renderKid(){
   var wrap = el('<div class="screen" style="padding-top:16px;"></div>');
 
   var top = el('<div style="display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:10px;"></div>');
-  top.appendChild(el('<div><h1 style="font-size:22px;">Hi '+escapeHtml(child.name)+'! 👋</h1><p style="color:var(--ink-soft); font-weight:700; font-size:13px;">Level '+lvl.level+' explorer</p></div>'));
+  top.appendChild(el('<div><h1 style="font-size:22px;">'+(child.avatar||'🧒')+' Hi '+escapeHtml(child.name)+(child.title?' '+child.title:'')+'! 👋</h1><p style="color:var(--ink-soft); font-weight:700; font-size:13px;">Level '+lvl.level+' explorer</p></div>'));
   var topBtns = el('<div style="display:flex; gap:8px;"></div>');
+  var customizeBtn = el('<button class="btn btn-ghost" style="padding:8px 10px; font-size:13px;">🎨</button>');
+  customizeBtn.onclick = function(){ state.showCustomize = !state.showCustomize; render(); };
+  topBtns.appendChild(customizeBtn);
   var refreshBtn = el('<button class="btn btn-ghost" style="padding:8px 10px; font-size:13px;">🔄</button>');
   refreshBtn.onclick = async function(){ refreshBtn.textContent='⏳'; await refreshData(); };
   topBtns.appendChild(refreshBtn);
@@ -1088,10 +1102,34 @@ function renderKid(){
   helpBtn.onclick = function(){ state.cameFrom = 'kid'; state.instructionsTab = 'kid'; state.screen = 'instructions'; render(); };
   topBtns.appendChild(helpBtn);
   var exitBtn = el('<button class="btn btn-ghost" style="padding:8px 12px; font-size:13px;">Exit</button>');
-  exitBtn.onclick = function(){ state.screen='select'; render(); };
+  exitBtn.onclick = function(){ state.showCustomize = false; state.screen='select'; render(); };
   topBtns.appendChild(exitBtn);
   top.appendChild(topBtns);
   wrap.appendChild(top);
+
+  if(state.showCustomize){
+    var customCard = el('<div class="card"></div>');
+    customCard.appendChild(el('<h3 style="font-size:15px; margin-bottom:8px;">Pick your icon</h3>'));
+    var avatarGrid = el('<div style="display:flex; flex-wrap:wrap; gap:6px; margin-bottom:14px;"></div>');
+    AVATAR_CHOICES.forEach(function(a){
+      var ab = el('<button style="font-size:22px; width:42px; height:42px; border-radius:10px; border:2px solid var(--line); background:#fff;">'+a+'</button>');
+      if(a === (child.avatar||'🧒')) ab.style.borderColor = 'var(--indigo)';
+      ab.onclick = async function(){ child.avatar = a; await saveConfig(); render(); };
+      avatarGrid.appendChild(ab);
+    });
+    customCard.appendChild(avatarGrid);
+    customCard.appendChild(el('<h3 style="font-size:15px; margin-bottom:8px;">Pick a title</h3>'));
+    var titleGrid = el('<div style="display:flex; flex-wrap:wrap; gap:6px;"></div>');
+    TITLE_CHOICES.forEach(function(ttl){
+      var tb = el('<button class="pill" style="border:2px solid '+(ttl===(child.title||'')?'var(--indigo)':'var(--line)')+';">'+(ttl?ttl:'None')+'</button>');
+      tb.style.background = ttl===(child.title||'') ? 'var(--indigo)' : 'var(--card-cream)';
+      tb.style.color = ttl===(child.title||'') ? '#fff' : 'var(--ink)';
+      tb.onclick = async function(){ child.title = ttl; await saveConfig(); render(); };
+      titleGrid.appendChild(tb);
+    });
+    customCard.appendChild(titleGrid);
+    wrap.appendChild(customCard);
+  }
 
   var xpCard = el('<div class="card" style="display:flex; align-items:center; gap:12px;"></div>');
   xpCard.appendChild(el('<div style="font-size:38px;">'+lvl.mascot+'</div>'));
@@ -1201,10 +1239,6 @@ function renderBadgeShelf(p){
 }
 
 loadAll();
-
-setInterval(function(){
-  if(state.screen === 'kid'){ refreshData(); }
-}, 15000);
 
 })();
 </script>
