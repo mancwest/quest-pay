@@ -560,6 +560,7 @@ function renderParentWeek(){
       list.appendChild(row);
     });
     statusCard.appendChild(list);
+    statusCard.appendChild(el('<div style="display:flex; justify-content:space-between; align-items:center; margin-top:10px; padding-top:10px; border-top:3px solid var(--indigo);"><span style="font-weight:800; font-size:14px;">Total allocated this week</span><span style="font-weight:800; font-size:18px; color:var(--indigo-deep);">'+fmtMoney(money.potentialBase)+'</span></div>'));
 
     if(money.pendingAmount > 0){
       var approveAllBtn = el('<button class="btn btn-sun btn-block" style="margin-top:12px; font-size:14px;">✅ Approve all pending ('+fmtMoney(money.pendingAmount)+')</button>');
