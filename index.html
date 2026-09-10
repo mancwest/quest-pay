@@ -185,6 +185,21 @@ async function fbDeleteAll(){
   }catch(e){}
 }
 
+function normalizeWeeks(){
+  Object.keys(state.weeks).forEach(function(cid){
+    var wk = state.weeks[cid];
+    if(wk && wk.assigned){
+      wk.assigned.forEach(function(t){
+        if(typeof t.target !== 'number') t.target = 1;
+        if(typeof t.count !== 'number') t.count = t.done ? 1 : 0;
+        if(typeof t.approvedCount !== 'number') t.approvedCount = 0;
+        if(typeof t.declined !== 'number') t.declined = 0;
+        delete t.done;
+      });
+    }
+  });
+}
+
 async function loadAll(){
   if(!FIREBASE_DB_URL || FIREBASE_DB_URL.indexOf('PASTE_YOUR') !== -1){
     state.screen = 'fbsetup';
@@ -198,23 +213,27 @@ async function loadAll(){
   state.history = (await fbGet('qp-history')) || {};
 
   if(!state.config.children) state.config.children = [];
-
-  Object.keys(state.weeks).forEach(function(cid){
-    var wk = state.weeks[cid];
-    if(wk && wk.assigned){
-      wk.assigned.forEach(function(t){
-        if(typeof t.target !== 'number') t.target = 1;
-        if(typeof t.count !== 'number') t.count = t.done ? 1 : 0;
-        if(typeof t.approvedCount !== 'number') t.approvedCount = 0;
-        delete t.done;
-      });
-    }
-  });
+  normalizeWeeks();
 
   if(state.config.children.length > 0) state.parentChildId = state.config.children[0].id;
 
   state.screen = state.config._setupDone ? 'select' : 'setup';
   render();
+}
+
+async function refreshData(){
+  if(!FIREBASE_DB_URL || FIREBASE_DB_URL.indexOf('PASTE_YOUR') !== -1) return;
+  var cfg = await fbGet('qp-config');
+  var wk = await fbGet('qp-weeks');
+  var pr = await fbGet('qp-profiles');
+  var hist = await fbGet('qp-history');
+  if(cfg) state.config = cfg;
+  state.weeks = wk || {};
+  if(pr) state.profiles = pr;
+  if(hist) state.history = hist;
+  if(!state.config.children) state.config.children = [];
+  normalizeWeeks();
+  if(state.screen === 'parent' || state.screen === 'kid') render();
 }
 
 async function saveConfig(){ await fbSet('qp-config', state.config); }
@@ -468,6 +487,9 @@ function renderParent(){
   var top = el('<div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;"></div>');
   top.appendChild(el('<h1 style="font-size:22px;">Grown-up dashboard</h1>'));
   var topBtns = el('<div style="display:flex; gap:8px;"></div>');
+  var refreshBtn = el('<button class="btn btn-ghost" style="padding:8px 12px; font-size:13px;">🔄</button>');
+  refreshBtn.onclick = async function(){ refreshBtn.textContent='⏳'; await refreshData(); };
+  topBtns.appendChild(refreshBtn);
   var helpBtn = el('<button class="btn btn-ghost" style="padding:8px 12px; font-size:13px;">❓</button>');
   helpBtn.onclick = function(){ state.cameFrom = 'parent'; state.instructionsTab = 'parent'; state.screen = 'instructions'; render(); };
   topBtns.appendChild(helpBtn);
@@ -550,12 +572,27 @@ function renderParentWeek(){
       infoRow.appendChild(right);
       row.appendChild(infoRow);
       if(pending > 0){
-        var pendRow = el('<div style="display:flex; align-items:center; justify-content:space-between; margin-top:6px; background:var(--card-deep); border-radius:10px; padding:7px 10px;"></div>');
-        pendRow.appendChild(el('<span style="font-size:12px; font-weight:800; color:var(--maroon-deep);">⏳ '+fmtMoney(t.value*pending)+' awaiting approval</span>'));
-        var approveOneBtn = el('<button class="btn btn-sun" style="padding:6px 14px; font-size:12px; box-shadow:none;">Approve</button>');
+        var pendRow = el('<div style="margin-top:6px; background:var(--card-deep); border-radius:10px; padding:7px 10px;"></div>');
+        pendRow.appendChild(el('<div style="font-size:12px; font-weight:800; color:var(--maroon-deep); margin-bottom:6px;">⏳ '+fmtMoney(t.value*pending)+' awaiting approval ('+pending+' of '+t.target+')</div>'));
+        var pendBtnRow = el('<div style="display:flex; gap:8px;"></div>');
+        var approveOneBtn = el('<button class="btn btn-sun" style="flex:1; padding:6px 10px; font-size:12px; box-shadow:none;">✅ Approve</button>');
         approveOneBtn.onclick = async function(){ t.approvedCount = t.count; await saveWeeks(); render(); };
-        pendRow.appendChild(approveOneBtn);
+        var declineOneBtn = el('<button class="btn btn-ghost" style="flex:1; padding:6px 10px; font-size:12px; border-color:var(--maroon-deep); color:var(--maroon-deep);">✕ Decline 1</button>');
+        declineOneBtn.onclick = async function(){
+          if(t.count > t.approvedCount){
+            t.count -= 1;
+            t.declined = (t.declined||0) + 1;
+            await saveWeeks();
+            render();
+          }
+        };
+        pendBtnRow.appendChild(approveOneBtn);
+        pendBtnRow.appendChild(declineOneBtn);
+        pendRow.appendChild(pendBtnRow);
         row.appendChild(pendRow);
+      }
+      if(t.declined > 0){
+        row.appendChild(el('<div style="font-size:11px; font-weight:800; color:var(--maroon-deep); margin-top:4px;">✕ '+t.declined+' declined this week</div>'));
       }
       list.appendChild(row);
     });
@@ -609,7 +646,7 @@ function renderParentWeek(){
       if(already){
         week.assigned = week.assigned.filter(function(a){return a.id!==t.id;});
       } else {
-        week.assigned.push({id:t.id, name:t.name, emoji:t.emoji, value:t.value, target:1, count:0, approvedCount:0});
+        week.assigned.push({id:t.id, name:t.name, emoji:t.emoji, value:t.value, target:1, count:0, approvedCount:0, declined:0});
       }
       await saveWeeks();
       render();
@@ -665,15 +702,38 @@ function renderParentWeek(){
     if(times>14) times = 14;
     if(!name){ oneOffErr.textContent='Give the quest a name.'; oneOffErr.style.display='block'; return; }
     if(isNaN(val) || val<0){ oneOffErr.textContent='Set a value of 0 or more.'; oneOffErr.style.display='block'; return; }
-    week.assigned.push({id:uid(), name:name, emoji:'⭐', value:val, target:times, count:0, approvedCount:0});
+    week.assigned.push({id:uid(), name:name, emoji:'⭐', value:val, target:times, count:0, approvedCount:0, declined:0});
     await saveWeeks();
     render();
   };
   oneOff.appendChild(oneOffBtn);
   assignCard.appendChild(oneOff);
 
+  if(week.assigned.length > 0){
+    var progressCard = el('<div class="card"></div>');
+    progressCard.appendChild(renderProgressBar(money.approvedAmount + money.pendingAmount, money.potentialTotal));
+    box.appendChild(progressCard);
+  }
+
   box.appendChild(assignCard);
   return box;
+}
+
+function renderProgressBar(earned, potential){
+  var pct = potential > 0 ? Math.min(100, Math.round((earned/potential)*100)) : 0;
+  var wrap = el('<div></div>');
+  wrap.appendChild(el('<div style="display:flex; justify-content:space-between; align-items:baseline; margin-bottom:6px;"><span style="font-weight:800; font-size:12px; color:var(--ink-soft);">This week\'s progress</span><span style="font-weight:800; font-size:13px;">'+fmtMoney(earned)+' of '+fmtMoney(potential)+'</span></div>'));
+  var track = el('<div style="background:var(--card-deep); border-radius:999px; height:18px; position:relative; overflow:hidden; border:2px solid var(--indigo);"></div>');
+  var fill = el('<div style="background:linear-gradient(90deg, var(--meadow), var(--gold)); height:100%; width:'+pct+'%; border-radius:999px; transition:width .4s ease;"></div>');
+  track.appendChild(fill);
+  if(pct > 0 && pct < 100){
+    track.appendChild(el('<span style="position:absolute; top:50%; left:'+pct+'%; transform:translate(-50%,-50%); font-size:13px;">✨</span>'));
+  }
+  if(pct >= 100){
+    track.appendChild(el('<span style="position:absolute; top:50%; left:50%; transform:translate(-50%,-50%); font-size:12px; font-weight:800; color:var(--ink);">🎉 Full send!</span>'));
+  }
+  wrap.appendChild(track);
+  return wrap;
 }
 
 function rowLine(label, value, strong){
@@ -1015,6 +1075,9 @@ function renderKid(){
   var top = el('<div style="display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:10px;"></div>');
   top.appendChild(el('<div><h1 style="font-size:22px;">Hi '+escapeHtml(child.name)+'! 👋</h1><p style="color:var(--ink-soft); font-weight:700; font-size:13px;">Level '+lvl.level+' explorer</p></div>'));
   var topBtns = el('<div style="display:flex; gap:8px;"></div>');
+  var refreshBtn = el('<button class="btn btn-ghost" style="padding:8px 10px; font-size:13px;">🔄</button>');
+  refreshBtn.onclick = async function(){ refreshBtn.textContent='⏳'; await refreshData(); };
+  topBtns.appendChild(refreshBtn);
   var helpBtn = el('<button class="btn btn-ghost" style="padding:8px 10px; font-size:13px;">❓</button>');
   helpBtn.onclick = function(){ state.cameFrom = 'kid'; state.instructionsTab = 'kid'; state.screen = 'instructions'; render(); };
   topBtns.appendChild(helpBtn);
@@ -1068,12 +1131,15 @@ function renderKid(){
     if(t.count > t.approvedCount){
       taskCard.appendChild(el('<div style="margin-top:6px; font-size:11px; font-weight:800; color:var(--maroon-deep);">⏳ waiting for grown-up approval</div>'));
     }
+    if(t.declined > 0){
+      taskCard.appendChild(el('<div style="margin-top:6px; font-size:11px; font-weight:800; color:var(--maroon-deep);">✕ '+t.declined+' of '+t.target+' declined — ask a grown-up and try again</div>'));
+    }
 
     var controls = el('<div style="display:flex; gap:8px; margin-top:8px;"></div>');
     if(t.count > 0){
-      var minusBtn = el('<button style="flex:0 0 48px; height:38px; border-radius:10px; border:2px solid var(--line); background:#fff; font-weight:800;">-1</button>');
-      minusBtn.onclick = async function(){ t.count = Math.max(0, t.count-1); if(t.approvedCount>t.count) t.approvedCount=t.count; await saveWeeks(); render(); };
-      controls.appendChild(minusBtn);
+      var undoBtn = el('<button style="flex:0 0 90px; height:38px; border-radius:10px; border:2px solid var(--line); background:#fff; font-weight:800; font-size:12px; color:var(--ink-soft);">Oops, not done</button>');
+      undoBtn.onclick = async function(){ t.count = Math.max(0, t.count-1); if(t.approvedCount>t.count) t.approvedCount=t.count; await saveWeeks(); render(); };
+      controls.appendChild(undoBtn);
     }
     if(t.count < t.target){
       var plusBtn = el('<button style="flex:1; height:38px; border-radius:10px; border:none; background:var(--indigo); color:#fff; font-weight:800;">+1 done ⭐</button>');
@@ -1106,6 +1172,12 @@ function renderKid(){
   wrap.appendChild(earnCard);
 
   wrap.appendChild(renderBadgeShelf(p));
+
+  wrap.style.paddingBottom = '96px';
+  var bottomBar = el('<div style="position:fixed; bottom:0; left:50%; transform:translateX(-50%); width:100%; max-width:480px; box-sizing:border-box; background:var(--card-cream); border-top:3px solid var(--indigo); box-shadow:0 -4px 14px rgba(58,46,85,0.18); padding:10px 18px calc(10px + env(safe-area-inset-bottom)); z-index:50;"></div>');
+  bottomBar.appendChild(renderProgressBar(money.approvedAmount + money.pendingAmount, money.potentialTotal));
+  wrap.appendChild(bottomBar);
+
   return wrap;
 }
 
@@ -1123,6 +1195,11 @@ function renderBadgeShelf(p){
 }
 
 loadAll();
+
+setInterval(function(){
+  if(state.screen === 'kid'){ refreshData(); }
+}, 15000);
+
 })();
 </script>
 </body>
