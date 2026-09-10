@@ -152,7 +152,7 @@ function fmtMoney(n){ return CURRENCY + (Math.round(n*100)/100).toFixed(2).repla
 function defaultConfig(){
   return { parentPin:null, bonusAmount:5, taskLibrary: DEFAULT_TASKS.slice(), children:[], _setupDone:false };
 }
-function defaultWeek(){ return { assigned:[], awaitingApproval:false }; }
+function defaultWeek(){ return { assigned:[] }; }
 function defaultProfile(){ return { xp:0, totalWeeksApproved:0, currentStreak:0, bestStreak:0, totalTasksDone:0, badges:[] }; }
 
 var HISTORY_LIMIT = 12;
@@ -161,7 +161,7 @@ var HISTORY_LIMIT = 12;
 /* Replace the line below with your Firebase Realtime Database URL,
    e.g. https://quest-pay-family-default-rtdb.firebaseio.com
    Find it at the top of Firebase console > Build > Realtime Database */
-var FIREBASE_DB_URL = 'https://quest-pay-family-default-rtdb.firebaseio.com/';
+var FIREBASE_DB_URL = 'https://quest-pay-family-default-rtdb.firebaseio.com';
 
 async function fbGet(path){
   try{
@@ -205,6 +205,7 @@ async function loadAll(){
       wk.assigned.forEach(function(t){
         if(typeof t.target !== 'number') t.target = 1;
         if(typeof t.count !== 'number') t.count = t.done ? 1 : 0;
+        if(typeof t.approvedCount !== 'number') t.approvedCount = 0;
         delete t.done;
       });
     }
@@ -441,14 +442,23 @@ function levelInfo(xp){
   return { level:level, into:into, mascot: LEVEL_STAGES[stageIdx] };
 }
 
-function weekTotals(childId){
+function weekMoney(childId){
   var week = getWeek(childId);
-  var base = 0, allDone = week.assigned.length > 0;
+  var potentialBase = 0, approvedAmount = 0, pendingAmount = 0, allDone = week.assigned.length > 0;
   week.assigned.forEach(function(t){
-    base += t.value * t.count;
+    potentialBase += t.value * t.target;
+    approvedAmount += t.value * t.approvedCount;
+    pendingAmount += t.value * (t.count - t.approvedCount);
     if(t.count < t.target) allDone = false;
   });
-  return { base:base, allDone:allDone, bonus: allDone ? state.config.bonusAmount : 0 };
+  return {
+    potentialBase: potentialBase,
+    potentialBonus: state.config.bonusAmount,
+    potentialTotal: potentialBase + state.config.bonusAmount,
+    approvedAmount: approvedAmount,
+    pendingAmount: pendingAmount,
+    allDone: allDone
+  };
 }
 
 /* ---------- PARENT VIEW ---------- */
@@ -518,7 +528,7 @@ function renderParentWeek(){
   var child = state.config.children.filter(function(c){return c.id===childId;})[0];
   var week = getWeek(childId);
   var box = el('<div></div>');
-  var totals = weekTotals(childId);
+  var money = weekMoney(childId);
 
   if(week.assigned.length === 0){
     box.appendChild(el('<div class="card" style="text-align:center; padding:26px 16px;"><div style="font-size:36px;">🧭</div><h3 style="margin:8px 0 4px;">No quests assigned yet</h3><p style="color:var(--ink-soft); font-weight:700; font-size:13px;">Pick tasks below for '+escapeHtml(child.name)+'\'s week.</p></div>'));
@@ -530,42 +540,62 @@ function renderParentWeek(){
     var list = el('<div style="margin-top:10px;"></div>');
     week.assigned.forEach(function(t){
       var complete = t.count >= t.target;
-      var row = el('<div style="display:flex; align-items:center; justify-content:space-between; padding:9px 0; border-top:2px solid var(--line);"></div>');
-      row.appendChild(el('<div style="display:flex; align-items:center; gap:10px;"><span style="font-size:20px;">'+t.emoji+'</span><span style="font-weight:700;">'+escapeHtml(t.name)+'</span></div>'));
+      var pending = t.count - t.approvedCount;
+      var row = el('<div style="padding:9px 0; border-top:2px solid var(--line);"></div>');
+      var infoRow = el('<div style="display:flex; align-items:center; justify-content:space-between;"></div>');
+      infoRow.appendChild(el('<div style="display:flex; align-items:center; gap:10px;"><span style="font-size:20px;">'+t.emoji+'</span><span style="font-weight:700;">'+escapeHtml(t.name)+'</span></div>'));
       var right = el('<div style="display:flex; align-items:center; gap:8px;"></div>');
       right.appendChild(el('<span style="font-weight:800; color:var(--ink-soft); font-size:13px;">'+fmtMoney(t.value)+' ea</span>'));
       right.appendChild(el('<span style="font-weight:800; font-size:13px; color:'+(complete?'var(--meadow-deep)':'var(--ink-soft)')+';">'+(complete?'✅ ':'')+t.count+'/'+t.target+'</span>'));
-      row.appendChild(right);
+      infoRow.appendChild(right);
+      row.appendChild(infoRow);
+      if(pending > 0){
+        var pendRow = el('<div style="display:flex; align-items:center; justify-content:space-between; margin-top:6px; background:var(--card-deep); border-radius:10px; padding:7px 10px;"></div>');
+        pendRow.appendChild(el('<span style="font-size:12px; font-weight:800; color:var(--maroon-deep);">⏳ '+fmtMoney(t.value*pending)+' awaiting approval</span>'));
+        var approveOneBtn = el('<button class="btn btn-sun" style="padding:6px 14px; font-size:12px; box-shadow:none;">Approve</button>');
+        approveOneBtn.onclick = async function(){ t.approvedCount = t.count; await saveWeeks(); render(); };
+        pendRow.appendChild(approveOneBtn);
+        row.appendChild(pendRow);
+      }
       list.appendChild(row);
     });
     statusCard.appendChild(list);
-    var removeBtn = el('<button class="btn btn-ghost btn-block" style="margin-top:12px; font-size:13px;">Clear this week</button>');
+
+    if(money.pendingAmount > 0){
+      var approveAllBtn = el('<button class="btn btn-sun btn-block" style="margin-top:12px; font-size:14px;">✅ Approve all pending ('+fmtMoney(money.pendingAmount)+')</button>');
+      approveAllBtn.onclick = async function(){
+        week.assigned.forEach(function(t){ t.approvedCount = t.count; });
+        await saveWeeks();
+        render();
+      };
+      statusCard.appendChild(approveAllBtn);
+    }
+
+    var removeBtn = el('<button class="btn btn-ghost btn-block" style="margin-top:10px; font-size:13px;">Clear this week</button>');
     removeBtn.onclick = async function(){ state.weeks[childId] = defaultWeek(); await saveWeeks(); render(); };
     statusCard.appendChild(removeBtn);
     box.appendChild(statusCard);
 
     var payCard = el('<div class="card"></div>');
-    payCard.appendChild(el('<h3 style="font-size:16px; margin-bottom:8px;">Pay-out breakdown</h3>'));
-    payCard.appendChild(rowLine('Tasks completed', fmtMoney(totals.base)));
-    payCard.appendChild(rowLine('Full-week bonus', totals.allDone ? fmtMoney(totals.bonus) : fmtMoney(0)+' (needs all tasks done)'));
-    payCard.appendChild(rowLine('Total to pay out', fmtMoney(totals.base + totals.bonus), true));
+    payCard.appendChild(el('<h3 style="font-size:16px; margin-bottom:8px;">Money</h3>'));
+    payCard.appendChild(rowLine('Approved so far', fmtMoney(money.approvedAmount)));
+    payCard.appendChild(rowLine('Pending approval', fmtMoney(money.pendingAmount)));
+    payCard.appendChild(rowLine('Potential total (incl. bonus)', fmtMoney(money.potentialTotal)));
+    payCard.appendChild(el('<p style="font-size:12px; color:var(--ink-soft); font-weight:700; margin-top:6px;">Bonus of '+fmtMoney(state.config.bonusAmount)+' only counts if every quest reaches its full target.</p>'));
 
-    if(!week.awaitingApproval){
-      payCard.appendChild(el('<p style="font-size:13px; color:var(--ink-soft); font-weight:700; margin-top:10px;">Waiting for '+escapeHtml(child.name)+' to mark quests done and call for approval.</p>'));
-      var approveAnyway = el('<button class="btn btn-sun btn-block" style="margin-top:6px;">Approve now anyway</button>');
-      approveAnyway.onclick = function(){ approveWeek(childId); };
-      payCard.appendChild(approveAnyway);
-    } else {
-      var approveBtn = el('<button class="btn btn-mint btn-block" style="margin-top:10px; font-size:17px;">✅ Approve & pay out</button>');
-      approveBtn.onclick = function(){ approveWeek(childId); };
-      payCard.appendChild(approveBtn);
-    }
+    var closeBtn = el('<button class="btn btn-mint btn-block" style="margin-top:10px; font-size:15px;">🏁 Close the week & finalize</button>');
+    closeBtn.onclick = function(){ closeWeek(childId); };
+    payCard.appendChild(closeBtn);
+    payCard.appendChild(el('<p style="font-size:11px; color:var(--ink-soft); font-weight:700; margin-top:6px;">Approves anything still pending, awards the bonus if everything\'s done, logs it to history, and starts a fresh week.</p>'));
     box.appendChild(payCard);
   }
 
   var assignCard = el('<div class="card"></div>');
   assignCard.appendChild(el('<h3 style="font-size:16px; margin-bottom:6px;">Assign quests</h3>'));
   assignCard.appendChild(el('<p style="font-size:13px; color:var(--ink-soft); font-weight:700; margin-bottom:8px;">Tap tasks from the library to add them to '+escapeHtml(child.name)+'\'s week.</p>'));
+  if(week.assigned.length > 0){
+    assignCard.appendChild(el('<div style="background:var(--card-deep); border-radius:10px; padding:10px 12px; margin-bottom:10px; font-weight:800; font-size:13px; text-align:center;">Allocated so far: '+fmtMoney(money.potentialBase)+' · with bonus: '+fmtMoney(money.potentialTotal)+'</div>'));
+  }
   var assignedIds = week.assigned.map(function(t){return t.id;});
   state.config.taskLibrary.forEach(function(t){
     var already = assignedIds.indexOf(t.id) !== -1;
@@ -578,7 +608,7 @@ function renderParentWeek(){
       if(already){
         week.assigned = week.assigned.filter(function(a){return a.id!==t.id;});
       } else {
-        week.assigned.push({id:t.id, name:t.name, emoji:t.emoji, value:t.value, target:1, count:0});
+        week.assigned.push({id:t.id, name:t.name, emoji:t.emoji, value:t.value, target:1, count:0, approvedCount:0});
       }
       await saveWeeks();
       render();
@@ -600,7 +630,7 @@ function renderParentWeek(){
       var countLabel = el('<span style="font-weight:800; min-width:18px; text-align:center;">'+t.target+'</span>');
       var plus = el('<button style="width:30px; height:30px; border-radius:8px; border:2px solid var(--line); background:#fff; font-weight:800;">+</button>');
       minus.onclick = async function(){
-        if(t.target>1){ t.target--; if(t.count>t.target) t.count=t.target; await saveWeeks(); render(); }
+        if(t.target>1){ t.target--; if(t.count>t.target) t.count=t.target; if(t.approvedCount>t.target) t.approvedCount=t.target; await saveWeeks(); render(); }
       };
       plus.onclick = async function(){
         if(t.target<14){ t.target++; await saveWeeks(); render(); }
@@ -634,7 +664,7 @@ function renderParentWeek(){
     if(times>14) times = 14;
     if(!name){ oneOffErr.textContent='Give the quest a name.'; oneOffErr.style.display='block'; return; }
     if(isNaN(val) || val<0){ oneOffErr.textContent='Set a value of 0 or more.'; oneOffErr.style.display='block'; return; }
-    week.assigned.push({id:uid(), name:name, emoji:'⭐', value:val, target:times, count:0});
+    week.assigned.push({id:uid(), name:name, emoji:'⭐', value:val, target:times, count:0, approvedCount:0});
     await saveWeeks();
     render();
   };
@@ -652,15 +682,18 @@ function rowLine(label, value, strong){
   return r;
 }
 
-async function approveWeek(childId){
-  var totals = weekTotals(childId);
+async function closeWeek(childId){
   var week = getWeek(childId);
+  week.assigned.forEach(function(t){ t.approvedCount = t.count; });
+  var money = weekMoney(childId);
   var profile = getProfile(childId);
   var tasksDone = week.assigned.reduce(function(s,t){return s+t.count;},0);
+  var bonus = money.allDone ? state.config.bonusAmount : 0;
+  var base = money.approvedAmount;
 
-  profile.xp += tasksDone*10 + (totals.allDone ? 50 : 0);
+  profile.xp += tasksDone*10 + (money.allDone ? 50 : 0);
   profile.totalTasksDone += tasksDone;
-  if(totals.allDone){
+  if(money.allDone){
     profile.currentStreak += 1;
     if(profile.currentStreak > profile.bestStreak) profile.bestStreak = profile.currentStreak;
   } else {
@@ -680,10 +713,10 @@ async function approveWeek(childId){
     date: new Date().toISOString().slice(0,10),
     tasksDone: tasksDone,
     tasksTotal: week.assigned.length,
-    base: totals.base,
-    bonus: totals.bonus,
-    total: totals.base + totals.bonus,
-    allDone: totals.allDone
+    base: base,
+    bonus: bonus,
+    total: base + bonus,
+    allDone: money.allDone
   });
   state.history[childId] = state.history[childId].slice(0, HISTORY_LIMIT);
 
@@ -1005,18 +1038,7 @@ function renderKid(){
     return wrap;
   }
 
-  var totals = weekTotals(childId);
-
-  if(week.awaitingApproval){
-    var chestCard = el('<div class="card" style="text-align:center; padding:30px 16px;"></div>');
-    chestCard.appendChild(el('<div style="font-size:56px; animation: wiggle 1.8s ease-in-out infinite;">🔒📦</div>'));
-    chestCard.appendChild(el('<h3 style="margin:12px 0 4px;">Waiting for approval</h3>'));
-    chestCard.appendChild(el('<p style="color:var(--ink-soft); font-weight:700; font-size:13px;">Show a grown-up so they can open your treasure chest!</p>'));
-    chestCard.appendChild(el('<p style="font-weight:800; margin-top:10px; font-size:16px;">Ready to earn: '+fmtMoney(totals.base+totals.bonus)+'</p>'));
-    wrap.appendChild(chestCard);
-    wrap.appendChild(renderBadgeShelf(p));
-    return wrap;
-  }
+  var money = weekMoney(childId);
 
   var trailCard = el('<div class="card"></div>');
   trailCard.appendChild(el('<h3 style="font-size:16px; margin-bottom:10px;">This week\'s quest trail</h3>'));
@@ -1042,11 +1064,14 @@ function renderKid(){
     topRow.appendChild(leftPart);
     topRow.appendChild(el('<span style="font-weight:800; font-size:14px; color:'+(complete?'var(--meadow-deep)':'var(--ink-soft)')+';">'+t.count+' / '+t.target+'</span>'));
     taskCard.appendChild(topRow);
+    if(t.count > t.approvedCount){
+      taskCard.appendChild(el('<div style="margin-top:6px; font-size:11px; font-weight:800; color:var(--maroon-deep);">⏳ waiting for grown-up approval</div>'));
+    }
 
     var controls = el('<div style="display:flex; gap:8px; margin-top:8px;"></div>');
     if(t.count > 0){
       var minusBtn = el('<button style="flex:0 0 48px; height:38px; border-radius:10px; border:2px solid var(--line); background:#fff; font-weight:800;">-1</button>');
-      minusBtn.onclick = async function(){ t.count = Math.max(0, t.count-1); await saveWeeks(); render(); };
+      minusBtn.onclick = async function(){ t.count = Math.max(0, t.count-1); if(t.approvedCount>t.count) t.approvedCount=t.count; await saveWeeks(); render(); };
       controls.appendChild(minusBtn);
     }
     if(t.count < t.target){
@@ -1064,21 +1089,18 @@ function renderKid(){
   trailCard.appendChild(trail);
 
   var chest = el('<div style="text-align:center; margin-top:6px;"></div>');
-  chest.appendChild(el('<div style="font-size:40px;">'+(totals.allDone?'🎁':'🔒')+'</div>'));
-  chest.appendChild(el('<div style="font-weight:800; font-size:13px; color:var(--ink-soft);">'+(totals.allDone ? 'Bonus unlocked: '+fmtMoney(totals.bonus) : 'Finish every quest to unlock the '+fmtMoney(state.config.bonusAmount)+' bonus chest') +'</div>'));
+  chest.appendChild(el('<div style="font-size:40px;">'+(money.allDone?'🎁':'🔒')+'</div>'));
+  chest.appendChild(el('<div style="font-weight:800; font-size:13px; color:var(--ink-soft);">'+(money.allDone ? 'Bonus ready: '+fmtMoney(money.potentialBonus) : 'Finish every quest to unlock the '+fmtMoney(state.config.bonusAmount)+' bonus chest') +'</div>'));
   trailCard.appendChild(chest);
   wrap.appendChild(trailCard);
 
-  var earnCard = el('<div class="card" style="text-align:center;"></div>');
-  earnCard.appendChild(el('<div style="font-size:13px; font-weight:800; color:var(--ink-soft);">Earned so far</div>'));
-  earnCard.appendChild(el('<div style="font-size:30px; font-weight:800; color:var(--meadow-deep);">'+fmtMoney(totals.base+totals.bonus)+'</div>'));
-  var remainingUnits = week.assigned.reduce(function(s,t){return s+Math.max(0, t.target-t.count);},0);
-  if(remainingUnits === 0){
-    var callBtn = el('<button class="btn btn-berry btn-block" style="margin-top:10px; font-size:16px;">📣 Call the grown-up for approval!</button>');
-    callBtn.onclick = async function(){ week.awaitingApproval = true; await saveWeeks(); render(); };
-    earnCard.appendChild(callBtn);
-  } else {
-    earnCard.appendChild(el('<p style="font-size:12px; color:var(--ink-soft); font-weight:700; margin-top:6px;">'+remainingUnits+' more to go this week</p>'));
+  var earnCard = el('<div class="card"></div>');
+  earnCard.appendChild(el('<h3 style="font-size:16px; margin-bottom:10px; text-align:center;">Earning potential</h3>'));
+  earnCard.appendChild(rowLine('If you finish everything', fmtMoney(money.potentialTotal), true));
+  earnCard.appendChild(rowLine('Pending approval', fmtMoney(money.pendingAmount)));
+  earnCard.appendChild(rowLine('Already approved', fmtMoney(money.approvedAmount)));
+  if(money.pendingAmount > 0){
+    earnCard.appendChild(el('<p style="font-size:12px; color:var(--maroon-deep); font-weight:700; margin-top:8px;">⏳ Show a grown-up when you can so they can approve what\'s pending.</p>'));
   }
   wrap.appendChild(earnCard);
 
